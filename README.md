@@ -115,3 +115,28 @@ WantedBy=multi-user.target
 ```
 
 This ensures workers restart automatically on server reboot.
+
+## Screenshots
+
+### VPC
+![VPC](Screenshot_22-5-2026_05939_us-...jpeg)
+
+### Subnets
+![Subnets](Screenshot_22-5-2026_1052_us-...jpeg)
+
+### EC2 Instances
+![EC2](Screenshot_22-5-2026_1018_us-...jpeg)
+
+## Note on Live Deployment
+
+The live deployment has been torn down after submission to avoid unnecessary AWS costs (NAT Gateway + EC2 running costs).
+
+To redeploy from scratch:
+
+```bash
+cd terraform_scripts
+terraform init
+terraform apply
+```
+
+Full infrastructure comes up in under 5 minutes. Then follow the setup instructions above to deploy the workers.
