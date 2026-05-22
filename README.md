@@ -1,106 +1,144 @@
-# AlchemystAI DevOps Internship Assignment
+# AlchemystAI DevOps Assignment - Arnav Verma
 
-## Live API Endpoint
-## What Was Built
+This is my submission for the DevOps internship assignment.
+I'll walk through what I built, what didn't work and why,
+and what I'd do differently with more time.
 
-- AWS VPC with public and private subnets
-- caller-worker on public EC2 — accepts POST /v1/chat/completions from internet
-- inference-worker on private EC2 — processes requests, not reachable from internet
-- All infrastructure provisioned with Terraform
+## What I Built
 
-## Why iii-sdk Was Not Used
+The goal was to deploy two workers across two VMs where
+the inference worker sits in a private subnet and the caller
+worker handles public traffic.
 
-The iii framework requires KVM virtualization to run worker sandboxes.
-t3.micro instances on AWS do not support KVM (no /dev/kvm available).
-Additionally, iii-sdk is not available on public PyPI and their private
-registry (pypi.iii.dev) had an expired SSL certificate at time of submission.
+- Created a VPC on AWS with a public and private subnet
+- caller-worker runs on the public EC2 (port 8080) -
+  this is the only thing the internet can reach
+- inference-worker runs on the private EC2 (port 5000) -
+  no public IP, only reachable from the caller
+- Wrote all the infrastructure in Terraform so it can be
+  torn down and rebuilt cleanly
 
-Equivalent architecture was implemented using Flask — same network topology,
-same request flow, same isolation between public and private workers.
+## Architecture
+Internet
+   |
+   v
+Public Subnet (10.0.1.0/24)
+caller-worker EC2 - public IP, port 8080
+   |
+| HTTP call over private network
+   v
+Private Subnet (10.0.2.0/24)
+inference-worker EC2 - no public IP, port 5000
 
-## Setup Instructions
+## The iii-sdk Problem
 
-### Prerequisites
-- AWS CLI configured
-- Terraform installed
-- SSH key at ~/.ssh/id_rsa
+I spent a good amount of time trying to get the iii framework
+running before realizing it wasn't going to work on t3.micro.
 
-### Provision Infrastructure
+Two blockers I hit:
+1. iii needs KVM to run worker sandboxes - t3.micro doesn't
+   have /dev/kvm so the worker just kept failing to start
+2. iii-sdk isn't on public PyPI. Tried their private registry
+   at pypi.iii.dev but the SSL certificate had expired so
+   pip couldn't install it either
 
+After debugging this for a while I decided to implement the
+same architecture using Flask instead - same two VMs, same
+network setup, same request flow from internet through the
+caller to the inference worker. The only difference is I'm
+not using the iii RPC layer.
+
+## How to Run This
+
+You'll need AWS CLI set up, Terraform installed, and an
+SSH key at ~/.ssh/id_rsa.
+
+**Spin up the infrastructure:**
 ```bash
 cd terraform_scripts
 terraform init
 terraform apply
 ```
 
-Note the output IPs:
-- caller_public_ip
-- inference_private_ip
+Terraform will output two IPs - save them:
+- caller_public_ip (this is what you'll hit with curl)
+- inference_private_ip (this is the private address)
 
-### Deploy Inference Worker (private VM)
-
+**Set up the inference worker (private VM):**
 ```bash
-# copy key to caller VM first
+# first copy your SSH key to the caller VM
 scp -i ~/.ssh/id_rsa ~/.ssh/id_rsa ec2-user@<caller_public_ip>:~/.ssh/id_rsa
 
 # SSH into caller VM
 ssh -i ~/.ssh/id_rsa ec2-user@<caller_public_ip>
 
-# from caller VM, SSH into inference VM
+# from caller VM jump into the private inference VM
 ssh -i ~/.ssh/id_rsa ec2-user@<inference_private_ip>
 
-# on inference VM
+# install and run inference worker
 pip3 install flask
 curl -O https://raw.githubusercontent.com/Arnav2354/Arnav_AlchemystAI_Submission/main/workers/inference-worker/inference_app.py
 python3 inference_app.py &
 ```
 
-### Deploy Caller Worker (public VM)
-
+**Set up the caller worker (public VM):**
 ```bash
-# on caller VM
 pip3 install flask requests
 curl -O https://raw.githubusercontent.com/Arnav2354/Arnav_AlchemystAI_Submission/main/workers/caller-worker/caller_app.py
 INFERENCE_HOST=<inference_private_ip> python3 caller_app.py &
 ```
 
-### Test
-
+**Test it:**
 ```bash
 curl -X POST http://<caller_public_ip>:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages": [{"role": "user", "content": "hello"}]}'
 ```
 
-## What I Would Harden Before Production
+## Screenshots
 
-- Replace Flask dev server with gunicorn
-- Add HTTPS/TLS to the public endpoint
-- Use AWS Secrets Manager for any credentials
-- Add proper logging and CloudWatch integration
-- Use Auto Scaling Group for the caller worker
-- Lock down security groups further — restrict SSH to specific IPs
-- Add health check endpoint and ALB in front of caller worker
-- Use IAM instance roles instead of passing credentials
+### VPC
+![VPC](Screenshot_22-5-2026_05939_us-...jpeg)
 
-## What I Would Do Differently at 100x Model Size
+### Subnets
+![Subnets](Screenshot_22-5-2026_1052_us-...jpeg)
 
-- Use GPU instances (p3 or g4dn) for inference
-- Put inference worker behind an internal load balancer
-- Use S3 to store model weights instead of local disk
-- Use EKS to horizontally scale inference workers
-- Add a queue (SQS) between caller and inference to handle load spikes
-- Use spot instances for inference to reduce cost
+### EC2 Instances Running
+![EC2](Screenshot_22-5-2026_1018_us-...jpeg)
 
-## Server Restart Behavior
+## What I'd Harden Before Production
 
-Currently both workers run as background processes.
-On restart they need to be manually restarted.
+Honestly the current setup is pretty bare - here's what
+I'd change before putting this anywhere near production:
 
-In production this would be handled with systemd units:
+- swap Flask dev server for gunicorn
+- put HTTPS in front of the public endpoint
+- lock SSH down to specific IPs instead of 0.0.0.0/0
+- add CloudWatch logs so you can actually debug things
+- put an ALB in front of the caller worker
+- use IAM instance roles properly instead of passing keys around
+- health check endpoints on both workers
+
+## What I'd Do Differently at 100x Model Size
+
+At that scale the inference worker becomes the bottleneck:
+
+- need GPU instances (g4dn.xlarge or p3 to start)
+- store model weights on S3 instead of local disk
+- put an internal load balancer in front of multiple
+  inference workers
+- add SQS between caller and inference so you don't drop
+  requests under load
+- EKS for orchestrating the inference tier
+- spot instances for inference to keep costs down
+
+## Server Restart
+
+Right now both workers run as background processes with &
+so they die on restart. In production I'd use systemd:
 
 ```bash
-# example systemd unit for inference worker
+# /etc/systemd/system/inference-worker.service
 [Unit]
 Description=Inference Worker
 After=network.target
@@ -114,29 +152,11 @@ User=ec2-user
 WantedBy=multi-user.target
 ```
 
-This ensures workers restart automatically on server reboot.
+Then just systemctl enable inference-worker and it
+comes back up automatically on reboot.
 
-## Screenshots
+## Note
 
-### VPC
-![VPC](Screenshot_22-5-2026_05939_us-...jpeg)
-
-### Subnets
-![Subnets](Screenshot_22-5-2026_1052_us-...jpeg)
-
-### EC2 Instances
-![EC2](Screenshot_22-5-2026_1018_us-...jpeg)
-
-## Note on Live Deployment
-
-The live deployment has been torn down after submission to avoid unnecessary AWS costs (NAT Gateway + EC2 running costs).
-
-To redeploy from scratch:
-
-```bash
-cd terraform_scripts
-terraform init
-terraform apply
-```
-
-Full infrastructure comes up in under 5 minutes. Then follow the setup instructions above to deploy the workers.
+Took down the live deployment after testing to avoid
+burning through AWS credits (NAT Gateway adds up fast).
+terraform apply brings everything back up in about 5 minutes.
