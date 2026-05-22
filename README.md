@@ -98,13 +98,13 @@ curl -X POST http://<caller_public_ip>:8080/v1/chat/completions \
 ## Screenshots
 
 ### VPC
-![VPC](Screenshot_22-5-2026_05939_us-...jpeg)
+![VPC](Screenshot_VPC_.jpeg)
 
 ### Subnets
-![Subnets](Screenshot_22-5-2026_1052_us-...jpeg)
+![Subnets](Screenshot_Subnet.jpeg)
 
 ### EC2 Instances Running
-![EC2](Screenshot_22-5-2026_1018_us-...jpeg)
+![EC2](Screenshot_EC2_.jpeg)
 
 ## What I'd Harden Before Production
 
